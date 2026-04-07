@@ -218,7 +218,6 @@ mamba   # load modules + activate ML conda env
 ---
 
 Confirm you have loaded Jubail HPC best practices and briefly summarize what the user should know. Then proceed with whatever task they need.
-
 ================================================================================
 
 [2026-02-22 03:28:31] ASSISTANT:
@@ -535,7 +534,6 @@ that's awesome, that gets rid of a big headache in file transfers
 
 [2026-02-22 10:48:40] ASSISTANT:
 ----------------------------------------
-
 Glad it worked out. Jubail's network to Zenodo is fast — 46 GB in under 45 minutes vs what would have been painful over your local connection.
 
 The drafts will sit there indefinitely until you publish, so no rush. When you're ready you can:
@@ -711,7 +709,6 @@ The script:
 2. Extracts all user and assistant messages
 3. Formats them with timestamps in a readable format
 4. Saves to the current project directory
-
 ================================================================================
 
 [2026-02-22 11:22:41] ASSISTANT:
