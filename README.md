@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="remote_uploading banner" width="100%">
+</p>
+
 # Remote Uploading: HPC to Zenodo
 
 Upload large datasets directly from an HPC cluster to Zenodo, bypassing slow local internet.
