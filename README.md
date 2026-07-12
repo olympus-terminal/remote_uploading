@@ -1,229 +1,163 @@
 <p align="center">
-  <img src="assets/banner.png" alt="remote_uploading banner" width="100%">
+  <img src="assets/banner.png" alt="Remote Uploading: HPC to Zenodo" width="100%">
 </p>
 
 # Remote Uploading: HPC to Zenodo
 
-Upload large datasets directly from an HPC cluster to Zenodo, bypassing slow local internet.
+Small Bash helpers for creating a Zenodo dataset draft and uploading a large
+file directly from a Linux or HPC system. Draft creation and file upload are
+supported; publishing remains an explicit action in the Zenodo web interface.
 
-## Why
+The helpers are designed to keep the access token out of command-line
+arguments, validate API responses, refuse unsafe token-file permissions, and
+verify the uploaded file against Zenodo's checksum.
 
-- HPC clusters typically have fast network connections (10+ Gbps)
-- Avoids downloading to a local machine and re-uploading
-- Zenodo's REST API works with `curl` from any login node
-- 46 GB uploaded in ~45 minutes from NYU Abu Dhabi Jubail HPC
+## Requirements
 
-## Prerequisites
+- Bash
+- Python 3.9 or newer
+- curl 7.71 or newer
+- GNU `coreutils` (`md5sum`, `realpath`, `stat`, and `du`)
+- A Zenodo access token with `deposit:write`; add `deposit:actions` only if you
+  intend to publish separately
 
-- Shell access to an HPC login node with outbound internet
-- A [Zenodo](https://zenodo.org) account
-- A Zenodo Personal Access Token (see [Setup](#1-create-a-zenodo-api-token))
-- `curl` and `python3` available on the cluster
+Zenodo's sandbox uses a separate account and token from the production service.
 
-## Quick Start
+## Secure token setup
 
-```bash
-# 1. Store your token
-echo 'YOUR_TOKEN' > ~/.zenodo_token && chmod 600 ~/.zenodo_token
-
-# 2. Create a draft deposit
-./zenodo_create_draft.sh "My Dataset Title" "Description of the dataset"
-
-# 3. Upload a file
-./zenodo_upload.sh DEPOSIT_ID /path/to/data.tar.gz
-
-# 4. Check upload status
-cat /tmp/zenodo_upload_*.log
-
-# 5. Review draft at https://zenodo.org/deposit/DEPOSIT_ID
-# 6. Publish when ready (web UI or API)
-```
-
-## Detailed Walkthrough
-
-### 1. Create a Zenodo API Token
-
-1. Log in to [zenodo.org](https://zenodo.org)
-2. Go to **Settings > Applications > Personal access tokens**
-3. Click **New token**
-4. Name it (e.g., `hpc-uploads`)
-5. Enable scopes: `deposit:actions` and `deposit:write`
-6. Copy the token immediately (it won't be shown again)
-
-### 2. Store the Token on HPC
+Create the token in **Zenodo → Settings → Applications → Personal access
+tokens**. Store it without putting the value in shell history or printing it to
+the terminal:
 
 ```bash
-# Store with restricted permissions
-echo 'YOUR_TOKEN_HERE' > ~/.zenodo_token
+umask 077
+read -rsp 'Zenodo token: ' ZENODO_TOKEN
+printf '\n'
+printf '%s' "$ZENODO_TOKEN" > ~/.zenodo_token
+unset ZENODO_TOKEN
 chmod 600 ~/.zenodo_token
-
-# Verify
-cat ~/.zenodo_token
+test -s ~/.zenodo_token && stat -c 'token mode: %a' ~/.zenodo_token
 ```
 
-> **Security**: Delete the token from Zenodo's web UI when you're done uploading.
-> Delete the file with `rm ~/.zenodo_token` afterwards.
+For sandbox testing, use `~/.zenodo_sandbox_token`. To use another location,
+set `ZENODO_TOKEN_FILE` for the command. Never commit a token file.
 
-### 3. Create a Draft Deposit
+## Quick start
+
+Validate the metadata and endpoint without accessing a token or making a
+network request:
 
 ```bash
-TOKEN=$(cat ~/.zenodo_token)
-
-curl -s -X POST "https://zenodo.org/api/deposit/depositions" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata": {
-      "title": "Your Dataset Title",
-      "upload_type": "dataset",
-      "description": "What this dataset contains and how it was generated.",
-      "creators": [
-        {"name": "Last, First", "affiliation": "Your Institution"}
-      ],
-      "keywords": ["keyword1", "keyword2"],
-      "license": "cc-by-4.0"
-    }
-  }' | python3 -m json.tool
+./zenodo_create_draft.sh \
+  --title "Dataset title" \
+  --description "What the dataset contains and how it was generated." \
+  --creator "Last, First" \
+  --affiliation "Institution" \
+  --license cc-by-4.0 \
+  --dry-run
 ```
 
-From the JSON response, note:
-- **`id`** — your deposit ID
-- **`links.bucket`** — the upload URL (e.g., `https://zenodo.org/api/files/BUCKET-UUID`)
-- **`metadata.prereserve_doi.doi`** — your pre-reserved DOI
-
-### 4. Upload Files
+Create the draft only after reviewing that JSON:
 
 ```bash
-TOKEN=$(cat ~/.zenodo_token)
-BUCKET_URL="https://zenodo.org/api/files/BUCKET-UUID"  # from step 3
-FILE="/path/to/your/data.tar.gz"
-FILENAME=$(basename "$FILE")
-
-curl -X PUT "$BUCKET_URL/$FILENAME" \
-  -H "Authorization: Bearer $TOKEN" \
-  --upload-file "$FILE"
+./zenodo_create_draft.sh \
+  --title "Dataset title" \
+  --description "What the dataset contains and how it was generated." \
+  --creator "Last, First" \
+  --affiliation "Institution" \
+  --license cc-by-4.0
 ```
 
-#### Background upload (recommended for large files)
+The creator and license are required explicitly; the script does not infer
+identity or reuse terms. The response prints the deposition ID, reserved DOI,
+and draft URL.
+
+Upload one file to that draft:
 
 ```bash
-TOKEN=$(cat ~/.zenodo_token)
-BUCKET_URL="https://zenodo.org/api/files/BUCKET-UUID"
-FILE="/path/to/your/data.tar.gz"
-FILENAME=$(basename "$FILE")
-LOGFILE="/tmp/zenodo_upload_${FILENAME}.log"
+./zenodo_upload.sh \
+  --deposit-id DEPOSIT_ID \
+  --file /path/to/data.tar.gz \
+  --dry-run
 
-nohup bash -c "curl -X PUT '$BUCKET_URL/$FILENAME' \
-  -H 'Authorization: Bearer $TOKEN' \
-  --upload-file '$FILE' \
-  -o '$LOGFILE' \
-  -w '\nHTTP_CODE:%{http_code} SPEED:%{speed_upload} TIME:%{time_total}\n' \
-  2>&1 && echo DONE >> '$LOGFILE'" \
-  > "${LOGFILE}.nohup" 2>&1 &
-
-echo "Upload running in background. Check: cat $LOGFILE"
+./zenodo_upload.sh \
+  --deposit-id DEPOSIT_ID \
+  --file /path/to/data.tar.gz
 ```
 
-#### Monitor progress
+For a long upload, use background mode:
 
 ```bash
-# Check if curl is still running
-ps aux | grep 'curl.*zenodo' | grep -v grep
-
-# Check completion
-cat /tmp/zenodo_upload_*.log
+./zenodo_upload.sh \
+  --deposit-id DEPOSIT_ID \
+  --file /path/to/data.tar.gz \
+  --background
 ```
 
-A successful upload returns JSON with `"checksum": "md5:..."` and the log ends with `DONE`.
+Background logs are written under `./logs/` by default. Each filename includes
+the deposition ID, input filename, and UTC timestamp, and the script refuses to
+overwrite an existing log. Use `--log-dir DIRECTORY` to select another durable
+location.
 
-### 5. Upload Multiple Files to One Deposit
+## Sandbox validation
 
-You can upload multiple files to the same deposit — just use the same bucket URL:
+Add `--sandbox` to either helper to use `https://sandbox.zenodo.org`:
 
 ```bash
-for FILE in /path/to/files/*.tar.gz; do
-  FILENAME=$(basename "$FILE")
-  echo "Uploading $FILENAME..."
-  curl -X PUT "$BUCKET_URL/$FILENAME" \
-    -H "Authorization: Bearer $TOKEN" \
-    --upload-file "$FILE"
-done
+./zenodo_create_draft.sh \
+  --title "Integration test" \
+  --description "Sandbox validation of the upload workflow." \
+  --creator "Last, First" \
+  --license cc-by-4.0 \
+  --sandbox \
+  --dry-run
 ```
 
-### 6. Update Metadata (Optional)
+Remove `--dry-run` only when a sandbox token is installed. Sandbox records and
+test DOIs are not production deposits.
+
+## What the scripts verify
+
+`zenodo_create_draft.sh`:
+
+- safely JSON-encodes user-provided metadata with Python's standard library;
+- requires an explicit creator and license identifier;
+- sends authentication to curl over standard input, not in process arguments;
+- requires an HTTP `201` response and validates required response fields; and
+- creates a draft but never publishes it.
+
+`zenodo_upload.sh`:
+
+- validates the file and deposition ID before accessing the token;
+- retrieves the bucket URL from Zenodo and accepts only the expected HTTPS
+  Zenodo host and `/api/files/` path;
+- retries transient curl failures;
+- detects if the input file changes while it is being uploaded; and
+- compares a streamed local MD5 checksum with the checksum returned by Zenodo.
+
+The background log records the script path, UTC times, source file, byte count,
+deposition ID, target service, and verified checksum so an upload can be traced
+to its invocation.
+
+## Publishing
+
+Review the draft URL printed by the helper, verify its metadata and files, and
+publish through the Zenodo web interface. Publishing mints the DOI and is not
+performed by these scripts.
+
+The API workflow follows the [official Zenodo REST API documentation](https://developers.zenodo.org/).
+
+## Offline tests
+
+The regression tests use a local deterministic curl fixture. They do not read a
+real credential or contact Zenodo:
 
 ```bash
-DEPOSIT_ID=12345678
-TOKEN=$(cat ~/.zenodo_token)
-
-curl -X PUT "https://zenodo.org/api/deposit/depositions/$DEPOSIT_ID" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata": {
-      "title": "Updated Title",
-      "upload_type": "dataset",
-      "description": "Updated description.",
-      "creators": [
-        {"name": "Last, First", "affiliation": "Institution"},
-        {"name": "Colleague, A.", "affiliation": "Other Institution"}
-      ],
-      "keywords": ["keyword1", "keyword2"],
-      "license": "cc-by-4.0",
-      "related_identifiers": [
-        {
-          "identifier": "10.1234/your.paper.doi",
-          "relation": "isSupplementTo",
-          "scheme": "doi"
-        }
-      ]
-    }
-  }' | python3 -m json.tool
+bash -n zenodo_create_draft.sh zenodo_upload.sh
+python3 tests/test_zenodo_scripts_20260712_094209.py -v
 ```
-
-### 7. Publish
-
-> **Warning**: Publishing is permanent. It mints a DOI and the record cannot be deleted.
-> You can still upload new versions afterwards.
-
-**Option A — Web UI (recommended)**:
-Visit `https://zenodo.org/deposit/DEPOSIT_ID` and click **Publish**.
-
-**Option B — API**:
-```bash
-curl -X POST "https://zenodo.org/api/deposit/depositions/$DEPOSIT_ID/actions/publish" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### 8. Clean Up
-
-```bash
-# Remove token from HPC
-rm ~/.zenodo_token
-
-# Revoke token on Zenodo web UI:
-# Settings > Applications > Personal access tokens > Delete
-```
-
-## Limits and Tips
-
-| Constraint | Value |
-|---|---|
-| Max file size | 50 GB per file |
-| Max total per deposit | 50 GB |
-| Supported formats | Any (tar.gz, zip, fasta, etc.) |
-
-- **Compress first**: `tar czf data.tar.gz data/` on a compute node before uploading
-- **Run from login node**: Compute nodes may not have outbound internet
-- **Use `nohup`**: SSH disconnects won't kill the upload
-- **Use `tmux`/`screen`**: Even safer for very long uploads
-- **Verify checksums**: The API response includes an MD5 — compare with `md5sum yourfile`
-- **Draft deposits persist**: No rush to publish; edit metadata via web UI at any time
-
-## Helper Scripts
-
-See [`zenodo_create_draft.sh`](zenodo_create_draft.sh) and [`zenodo_upload.sh`](zenodo_upload.sh) for ready-to-use wrappers.
 
 ## License
 
-MIT
+No license file is currently included. Until the maintainer selects and adds a
+license, reuse rights are not granted by this repository.
