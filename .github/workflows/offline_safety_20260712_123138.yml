@@ -1,0 +1,26 @@
+name: Offline Zenodo helper tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate helper syntax
+        run: bash -n zenodo_create_draft.sh zenodo_upload.sh
+
+      - name: Run offline helper suite
+        run: python3 tests/test_zenodo_scripts_20260712_094209.py -v
